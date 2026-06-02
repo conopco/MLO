@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MLO 法令ペイン</title>
+  <!-- Office.js -->
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <link rel="stylesheet" href="taskpane.css" />
+</head>
+<body>
+  <header>
+    <h1>MLO 法令ペイン</h1>
+    <p class="sub">本文を選択すると、法令名・条・項・号を解析して条文を表示します。</p>
+  </header>
+
+  <div class="toolbar">
+    <button id="btnAnalyzeSel" class="btn">選択箇所を解析</button>
+  </div>
+
+  <div class="manual">
+    <label for="manualInput">テキストを直接入力して解析：</label>
+    <textarea id="manualInput" rows="2" placeholder="例）会社法第362条第4項第1号 / 民法90条 / 独占禁止法第三条"></textarea>
+    <button id="btnAnalyzeInput" class="btn btn-secondary">入力を解析</button>
+  </div>
+
+  <div id="status" class="status">読み込み中…</div>
+  <div id="results"></div>
+
+  <footer>
+    出典：<a href="https://laws.e-gov.go.jp/" target="_blank" rel="noopener">e-Gov 法令検索</a>
+    ／ 条文の最新性は原典でご確認ください。
+  </footer>
+
+  <script src="taskpane.js"></script>
+</body>
+</html>

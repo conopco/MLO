@@ -1,0 +1,112 @@
+/* MLO 法令ペイン — 白黒基調、アクセントは焦げ茶系（作成者: MLO） */
+:root {
+  --ink: #1a1a1a;          /* 本文（ほぼ黒） */
+  --paper: #ffffff;        /* 背景（白） */
+  --line: #d9d4cf;         /* 罫線 */
+  --brown: #5b4636;        /* 焦げ茶（アクセント） */
+  --brown-dark: #3e2c23;   /* 濃い焦げ茶 */
+  --muted: #6b6b6b;        /* 補足テキスト */
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 12px;
+  font-family: "Yu Gothic", "Meiryo", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+header h1 {
+  margin: 0 0 2px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--brown-dark);
+  border-bottom: 2px solid var(--brown);
+  padding-bottom: 6px;
+}
+.sub { margin: 6px 0 12px; color: var(--muted); font-size: 12px; }
+
+.toolbar { margin-bottom: 12px; }
+
+.btn {
+  appearance: none;
+  border: 1px solid var(--brown);
+  background: var(--brown);
+  color: #fff;
+  padding: 7px 14px;
+  font-size: 13px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn:hover { background: var(--brown-dark); border-color: var(--brown-dark); }
+.btn-secondary {
+  background: #fff;
+  color: var(--brown-dark);
+}
+.btn-secondary:hover { background: #f4f1ee; }
+
+.manual {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+.manual label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.manual textarea {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  resize: vertical;
+  margin-bottom: 8px;
+}
+
+.status {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--brown);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--paper);
+}
+.cite {
+  font-weight: 700;
+  color: var(--brown-dark);
+  margin-bottom: 6px;
+}
+.body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.body.loading { color: var(--muted); font-style: italic; }
+.muted { color: var(--muted); }
+
+a.egov {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--brown);
+  text-decoration: none;
+}
+a.egov:hover { text-decoration: underline; color: var(--brown-dark); }
+
+footer {
+  margin-top: 16px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+}
+footer a { color: var(--brown); }
