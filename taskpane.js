@@ -136,6 +136,11 @@ const ALIAS = {
 Office.onReady((info) => {
   if (info.host !== Office.HostType.Word) return;
 
+  // Office.onReady の if (info.host !== Office.HostType.Word) return; の直後に追加
+if (Office.addin && Office.addin.setStartupBehavior) {
+  Office.addin.setStartupBehavior(Office.StartupBehavior.load);
+}
+  
   document.getElementById("status").textContent = "準備完了。本文を選択すると解析します。";
 
   // 選択変更イベント（デバウンス）
