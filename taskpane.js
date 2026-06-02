@@ -151,25 +151,46 @@ Office.onReady((info) => {
   document.getElementById("btnAnalyzeSel").addEventListener("click", analyzeSelection);
   document.getElementById("btnAnalyzeInput").addEventListener("click", () => {
     const t = document.getElementById("manualInput").value || "";
-    handleText(t);
+    handleText(t, "");   // 手動入力は前後の文脈なし
   });
 });
 
-/* 選択テキストを取得して解析 */
+/* 選択テキスト＋「選択より前の本文」を取得して解析
+ *   「同法」「法」「（同法）施行令／施行規則」の解決に、文書内の直前の法令名を用いる */
 function analyzeSelection() {
+  // Word API が使える場合：選択前の本文も読み取り、直前の法令名を文書から探す
+  if (typeof Word !== "undefined" && Word.run) {
+    Word.run(async (context) => {
+      const sel = context.document.getSelection();
+      sel.load("text");
+      const bodyStart = context.document.body.getRange("Start");
+      const preceding = bodyStart.expandTo(sel.getRange("Start"));
+      preceding.load("text");
+      await context.sync();
+      handleText(sel.text || "", preceding.text || "");
+    }).catch(() => {
+      // フォールバック：共通APIで選択テキストのみ
+      Office.context.document.getSelectedDataAsync(Office.CoercionType.Text, (res) => {
+        if (res.status === Office.AsyncResultStatus.Succeeded) handleText(res.value || "", "");
+        else setStatus("選択テキストを取得できませんでした。");
+      });
+    });
+    return;
+  }
   Office.context.document.getSelectedDataAsync(Office.CoercionType.Text, (res) => {
     if (res.status !== Office.AsyncResultStatus.Succeeded) {
       setStatus("選択テキストを取得できませんでした。");
       return;
     }
-    handleText(res.value || "");
+    handleText(res.value || "", "");
   });
 }
 
 /* ===========================================================================
  * テキスト処理 → 解析 → 表示
+ *   precedingText : 選択範囲より前の本文（直前の法令名の特定に使用）
  * ======================================================================== */
-async function handleText(text) {
+async function handleText(text, precedingText) {
   const results = document.getElementById("results");
   text = (text || "").trim();
 
@@ -179,7 +200,8 @@ async function handleText(text) {
     return;
   }
 
-  const refs = parseReferences(text);
+  const seedLaw = seedLawFromPreceding(precedingText || "");
+  const refs = parseReferences(text, seedLaw);
   if (refs.length === 0) {
     setStatus("選択範囲から法令の条文参照を検出できませんでした。");
     results.innerHTML = "";
@@ -209,41 +231,59 @@ async function handleText(text) {
 }
 
 /* ===========================================================================
- * 参照解析（法令名 + 条・項・号。表記ゆれ対応）
- *   group: 1=法令名(任意) 2=条 3=条の枝番 4=項 5=号
+ * 参照解析（参照語 + 法令名 + 施行令/施行規則 + 条・項・号。表記ゆれ対応）
+ *   group: 1=参照語(同法/法 等) 2=法律名 3=施行令/施行規則 4=条 5=枝番 6=項 7=号
  * ======================================================================== */
 function buildRegex() {
   const NUM = "[0-9０-９一二三四五六七八九十百千〇零]+";
-  const NAME =
-    "(?:同法|本法|当該法律|[一-龥々〆ヶ・ー、A-Za-z0-9０-９]{1,40}?" +
-    "(?:に関する法律|に関する法|施行令|施行規則|規則|条例|省令|政令|府令|府省令|勅令|令|法律|法))";
+  // 参照語（長いものを先に）：「同法」「法」など → 直前の法令名を指す
+  const REF = "当該法律の|当該法律|同法|本法|当該|同|本|法";
+  // 法律名を構成する文字：第・条・項・号・数字（算用/全角/漢数字）は除外し、
+  // 条番号を法律名として誤って飲み込まないようにする
+  const NAMECH = "(?:(?![第条項号一二三四五六七八九十百千〇零])[一-龥々〆ヶ]|[・ーA-Za-z])";
+  // 法律名（…法／…法律／…に関する法律／…条例／政令・省令等）。施行令/規則はここに含めない
+  const LAWBASE =
+    NAMECH + "{1,40}?(?:に関する法律|に関する法|法律|法|条例|政令|省令|府令|勅令)";
+  // 施行令／施行規則
+  const ENFORCE = "施行令|施行規則|施行細則";
+
   const PAT =
-    `(${NAME})?` +
-    `\\s*(?:第\\s*)?(${NUM})\\s*条` +
-    `(?:\\s*の\\s*(${NUM}))?` +
-    `(?:\\s*(?:第\\s*)?(${NUM})\\s*項)?` +
-    `(?:\\s*(?:第\\s*)?(${NUM})\\s*号)?`;
+    `(?:(${REF})\\s*)?` +                     // 1: 参照語
+    `(${LAWBASE})?` +                         // 2: 法律名
+    `\\s*(${ENFORCE})?` +                     // 3: 施行令/施行規則
+    `\\s*(?:第\\s*)?(${NUM})\\s*条` +          // 4: 条
+    `(?:\\s*の\\s*(${NUM}))?` +               // 5: 枝番
+    `(?:\\s*(?:第\\s*)?(${NUM})\\s*項)?` +     // 6: 項
+    `(?:\\s*(?:第\\s*)?(${NUM})\\s*号)?`;      // 7: 号
   return new RegExp(PAT, "g");
 }
 
-function parseReferences(text) {
+function parseReferences(text, seedLaw) {
   const re = buildRegex();
   const out = [];
-  let lastLaw = "";
+  let lastLaw = (seedLaw || "").trim();   // 直前の法令名（選択前の本文から引き継ぎ）
   let m;
   while ((m = re.exec(text)) !== null) {
     if (m.index === re.lastIndex) re.lastIndex++; // 無限ループ防止
 
-    let name = (m[1] || "").trim();
-    const art = toNum(m[2]);
-    let branch = m[3] ? String(toNum(m[3])) : "";
-    const para = m[4] ? toNum(m[4]) : 0;
-    const item = m[5] ? toNum(m[5]) : 0;
+    const base = (m[2] || "").trim();        // 明示の法律名
+    const enforce = (m[3] || "").trim();     // 施行令/施行規則
+    const art = toNum(m[4]);
+    let branch = m[5] ? String(toNum(m[5])) : "";
+    const para = m[6] ? toNum(m[6]) : 0;
+    const item = m[7] ? toNum(m[7]) : 0;
 
-    if (!name || name === "同法" || name === "本法" || name === "当該法律") {
-      name = lastLaw;
+    // 検索する法令名を決定
+    let name = "";
+    if (base) {
+      lastLaw = base;                                // 後続の「同法」用に基準法を更新
+      name = enforce ? base + enforce : base;        // 明示の○○法（施行令/規則）
+    } else if (enforce) {
+      // 「施行令」「同施行令」「同法施行令」/ 規則 → 直前の法律名＋施行令/規則
+      name = lastLaw ? lastLaw + enforce : "";
     } else {
-      lastLaw = name;
+      // 「同法」「法」「本法」「当該…」/ 名称なし → 直前の法律名
+      name = lastLaw;
     }
     if (!name || !art) continue;
 
@@ -258,6 +298,39 @@ function parseReferences(text) {
     return true;
   });
 }
+
+/* 選択範囲より前の本文から「直前の法令名」を推定
+ *   1) 「○○法…第n条」の形で引用された直近の法律名（高精度）
+ *   2) 無ければ、条を伴わずに登場した直近の法律名（誤検出語は除外） */
+function seedLawFromPreceding(text) {
+  if (!text) return "";
+  let last = "";
+
+  const re = buildRegex();
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index === re.lastIndex) re.lastIndex++;
+    const base = (m[2] || "").trim();
+    if (base) last = base;
+  }
+  if (last) return last;
+
+  const re2 = /((?:(?![第条項号一二三四五六七八九十百千〇零])[一-龥々〆ヶ]|[・ーA-Za-z]){1,40}?(?:に関する法律|法律|法))/g;
+  let m2;
+  while ((m2 = re2.exec(text)) !== null) {
+    const cand = m2[1].trim();
+    if (!DENY_NAMES.has(cand)) last = cand;
+  }
+  return last;
+}
+
+/* 「○○法」の形だが法令名ではない一般語（誤検出の除外用） */
+const DENY_NAMES = new Set([
+  "方法", "用法", "手法", "文法", "作法", "寸法", "語法", "技法", "話法", "製法",
+  "療法", "兵法", "魔法", "無法", "違法", "合法", "適法", "不法", "立法", "司法",
+  "公法", "私法", "実体法", "手続法", "成文法", "不文法", "現行法", "旧法", "新法",
+  "国内法", "国際法", "慣習法", "判例法", "自然法", "用法", "奏法", "書法", "算法"
+]);
 
 /* ===========================================================================
  * 法令ID 解決（v2 /laws  法令名検索）
@@ -576,12 +649,14 @@ function fillCard(card, ref, lawId, body) {
   } else {
     bodyEl.textContent = body;
   }
+  // 該当条文へジャンプ：e-Gov のアンカー #Mp-At_{条数}（枝番は _{枝番}）
+  const anchor = "#Mp-At_" + ref.art + (ref.branch ? "_" + ref.branch : "");
   const link = document.createElement("a");
   link.className = "egov";
-  link.href = WEB + lawId;
+  link.href = WEB + lawId + anchor;
   link.target = "_blank";
   link.rel = "noopener";
-  link.textContent = "e-Gov で開く ↗";
+  link.textContent = "e-Gov で開く（該当条文へ） ↗";
   card.appendChild(link);
 }
 
