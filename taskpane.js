@@ -16,7 +16,7 @@
  *  （README の Cloudflare Worker サンプル参照。空文字なら直接アクセス）
  *    例: const PROXY = "https://your-worker.example.workers.dev/?url=";
  * ------------------------------------------------------------------------- */
-const PROXY = "";
+const PROXY = "https://floral-silence-3dba.conopco.workers.dev/?url=";
 const API_V2 = "https://laws.e-gov.go.jp/api/2";
 const API_V1 = "https://laws.e-gov.go.jp/api/1";
 const WEB = "https://laws.e-gov.go.jp/law/";
