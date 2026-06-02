@@ -231,31 +231,72 @@ async function fetchArticle(lawId, art, branch, para) {
   const key = `${lawId}|${art}|${branch}|${para}`;
   if (articleCache.has(key)) return articleCache.get(key);
 
-  let articleParam = "第" + toKanji(art) + "条";
-  if (branch) articleParam += "の" + toKanji(parseInt(branch, 10));
-
-  const url = `${API_V1}/articles;lawId=${lawId};article=${encodeURIComponent(articleParam)}`;
-  const xmlText = await apiFetchText(url);
+  // article パラメータは「数字」を第一候補に、「第○条」漢数字を予備として試行する。
+  // （公式ドキュメントの例： article=1 ／ 仕様書の例： article=第十一条）
+  const attempts = [];
+  if (branch) {
+    attempts.push(`${art}の${branch}`);
+    attempts.push(`第${toKanji(art)}条の${toKanji(parseInt(branch, 10))}`);
+  } else {
+    attempts.push(`${art}`);
+    attempts.push(`第${toKanji(art)}条`);
+  }
 
   let body = "";
-  try {
-    const doc = new DOMParser().parseFromString(xmlText, "application/xml");
-    const code = doc.getElementsByTagName("Code")[0];
-    if (!code || code.textContent === "0") {
-      const articles = doc.getElementsByTagName("Article");
-      if (articles.length > 0) {
-        if (para > 0) {
-          const paras = articles[0].getElementsByTagName("Paragraph");
-          if (paras.length >= para) body = collectSentences(paras[para - 1]);
-        }
-        if (!body) body = collectSentences(articles[0]);
-      }
+  for (const ap of attempts) {
+    const url = `${API_V1}/articles;lawId=${lawId};article=${encodeURIComponent(ap)}`;
+    let xmlText;
+    try {
+      xmlText = await apiFetchText(url);
+    } catch (e) {
+      continue; // この形式は失敗。次の候補へ
     }
-  } catch (e) {
-    body = "";
+    body = parseArticleBody(xmlText, para);
+    if (body) break;
   }
 
   articleCache.set(key, body);
+  return body;
+}
+
+/* 条文内容取得APIの応答XMLから本文を抽出
+ *  ※ 応答には <Article> が2つ含まれる：
+ *     (1) <ApplData> 直下の <Article>34</Article>（条番号のメタ情報・中身なし）
+ *     (2) <LawContents> 配下の <Article Num="34">（条文本文）
+ *     → (2) を選ぶ必要がある。 */
+function parseArticleBody(xmlText, para) {
+  let body = "";
+  try {
+    const doc = new DOMParser().parseFromString(xmlText, "application/xml");
+    if (doc.getElementsByTagName("parsererror").length > 0) return "";
+
+    const code = doc.getElementsByTagName("Code")[0];
+    if (code && code.textContent.trim() !== "0") return "";
+
+    // 本文の <Article> は LawContents 配下にある（無ければ全体から探索）
+    const lc = doc.getElementsByTagName("LawContents")[0];
+    const scope = lc || doc;
+
+    // Num属性を持つ、または <Sentence> を含む <Article> を本文として採用
+    let contentArticle = null;
+    const arts = scope.getElementsByTagName("Article");
+    for (let i = 0; i < arts.length; i++) {
+      if (arts[i].getAttribute("Num") !== null ||
+          arts[i].getElementsByTagName("Sentence").length > 0) {
+        contentArticle = arts[i];
+        break;
+      }
+    }
+    if (!contentArticle) return "";
+
+    if (para > 0) {
+      const paras = contentArticle.getElementsByTagName("Paragraph");
+      if (paras.length >= para) body = collectSentences(paras[para - 1]);
+    }
+    if (!body) body = collectSentences(contentArticle);
+  } catch (e) {
+    body = "";
+  }
   return body;
 }
 
