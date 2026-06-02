@@ -25,31 +25,108 @@ const WEB = "https://laws.e-gov.go.jp/law/";
 const idCache = new Map();        // 正式法令名 -> 法令ID
 const articleCache = new Map();   // key -> 条文テキスト
 
-/* 略称・通称 -> 正式名称（企業法務で頻出のもの。必要に応じ追記可） */
+/* ---------------------------------------------------------------------------
+ * 略称・通称 → 正式名称（弁護士業務・企業法務で扱う主要法令を網羅）
+ *  ・値は「文字列」または「候補の配列」。配列の場合は先頭から順に e-Gov を検索し、
+ *    最初にヒットしたものを採用します（改称の過渡期に新旧どちらでも当たるように）。
+ *  ・正式名称がそのまま日常名称の法令（民法・会社法・特許法 等）は、本表に無くても
+ *    法令名でそのまま検索されます（必要なら追記してください）。
+ * ------------------------------------------------------------------------- */
 const ALIAS = {
+  /* ── 競争法・取引 ───────────────────────────── */
   "独占禁止法": "私的独占の禁止及び公正取引の確保に関する法律",
   "独禁法": "私的独占の禁止及び公正取引の確保に関する法律",
-  "下請法": "下請代金支払遅延等防止法",
+  // 下請法は2026年1月施行の改正で改称が進む過渡期。新旧双方を試行。
+  "下請法": ["下請代金支払遅延等防止法", "製造委託等に係る中小受託事業者に対する代金の支払の遅延等の防止に関する法律"],
+  "取適法": ["製造委託等に係る中小受託事業者に対する代金の支払の遅延等の防止に関する法律", "下請代金支払遅延等防止法"],
+  "フリーランス新法": "特定受託事業者に係る取引の適正化等に関する法律",
+  "フリーランス保護法": "特定受託事業者に係る取引の適正化等に関する法律",
+  "フリーランス・事業者間取引適正化等法": "特定受託事業者に係る取引の適正化等に関する法律",
+
+  /* ── 消費者保護・表示 ─────────────────────────── */
   "景品表示法": "不当景品類及び不当表示防止法",
   "景表法": "不当景品類及び不当表示防止法",
-  "個人情報保護法": "個人情報の保護に関する法律",
   "特定商取引法": "特定商取引に関する法律",
   "特商法": "特定商取引に関する法律",
+  "割販法": "割賦販売法",
   "PL法": "製造物責任法",
+  "製造物責任法": "製造物責任法",
+  "公益通報者保護法": "公益通報者保護法",
+
+  /* ── データ・IT・知財 ────────────────────────── */
+  "個人情報保護法": "個人情報の保護に関する法律",
+  "個情法": "個人情報の保護に関する法律",
+  "マイナンバー法": "行政手続における特定の個人を識別するための番号の利用等に関する法律",
+  "番号法": "行政手続における特定の個人を識別するための番号の利用等に関する法律",
+  // プロバイダ責任制限法は2024年改正で改称（情プラ法）。新旧双方を試行。
+  "プロバイダ責任制限法": ["特定電気通信による情報の流通によって発生する権利侵害等への対処に関する法律", "特定電気通信役務提供者の損害賠償責任の制限及び発信者情報の開示に関する法律"],
+  "プロ責法": ["特定電気通信による情報の流通によって発生する権利侵害等への対処に関する法律", "特定電気通信役務提供者の損害賠償責任の制限及び発信者情報の開示に関する法律"],
+  "情プラ法": "特定電気通信による情報の流通によって発生する権利侵害等への対処に関する法律",
+  "情報流通プラットフォーム対処法": "特定電気通信による情報の流通によって発生する権利侵害等への対処に関する法律",
+  "特定電子メール法": "特定電子メールの送信の適正化等に関する法律",
+  "電子署名法": "電子署名及び認証業務に関する法律",
+  "電子契約法": "電子消費者契約に関する民法の特例に関する法律",
+  "不正アクセス禁止法": "不正アクセス行為の禁止等に関する法律",
+  "不競法": "不正競争防止法",
+  "半導体集積回路配置法": "半導体集積回路の回路配置に関する法律",
+
+  /* ── 会社・組織・金融・証券 ───────────────────── */
+  "一般法人法": "一般社団法人及び一般財団法人に関する法律",
+  "一般社団・財団法人法": "一般社団法人及び一般財団法人に関する法律",
+  "公益法人認定法": "公益社団法人及び公益財団法人の認定等に関する法律",
+  "産業競争力強化法": "産業競争力強化法",
   "金商法": "金融商品取引法",
+  "金融サービス提供法": ["金融サービスの提供及び利用環境の整備等に関する法律", "金融サービスの提供に関する法律", "金融商品の販売等に関する法律"],
+  "金販法": ["金融サービスの提供及び利用環境の整備等に関する法律", "金融商品の販売等に関する法律"],
+  "資金決済法": "資金決済に関する法律",
+  "犯収法": "犯罪による収益の移転防止に関する法律",
+  "出資法": "出資の受入れ、預り金及び金利等の取締りに関する法律",
+  "投信法": "投資信託及び投資法人に関する法律",
+  "社債株式振替法": "社債、株式等の振替に関する法律",
+  "振替法": "社債、株式等の振替に関する法律",
+
+  /* ── 労働 ───────────────────────────────── */
+  "労基法": "労働基準法",
+  "労契法": "労働契約法",
+  "労組法": "労働組合法",
+  "労調法": "労働関係調整法",
+  "最賃法": "最低賃金法",
+  "賃確法": "賃金の支払の確保等に関する法律",
+  "安衛法": "労働安全衛生法",
+  "労働安全衛生法": "労働安全衛生法",
   "労働者派遣法": "労働者派遣事業の適正な運営の確保及び派遣労働者の保護等に関する法律",
   "派遣法": "労働者派遣事業の適正な運営の確保及び派遣労働者の保護等に関する法律",
   "パートタイム・有期雇用労働法": "短時間労働者及び有期雇用労働者の雇用管理の改善等に関する法律",
-  "一般法人法": "一般社団法人及び一般財団法人に関する法律",
-  "公益法人認定法": "公益社団法人及び公益財団法人の認定等に関する法律",
-  "電子契約法": "電子消費者契約に関する民法の特例に関する法律",
-  "プロバイダ責任制限法": "特定電気通信役務提供者の損害賠償責任の制限及び発信者情報の開示に関する法律",
-  "金融サービス提供法": "金融サービスの提供及び利用環境の整備等に関する法律",
-  "犯収法": "犯罪による収益の移転防止に関する法律",
-  "マイナンバー法": "行政手続における特定の個人を識別するための番号の利用等に関する法律",
-  "番号法": "行政手続における特定の個人を識別するための番号の利用等に関する法律",
+  "パート有期法": "短時間労働者及び有期雇用労働者の雇用管理の改善等に関する法律",
+  "男女雇用機会均等法": "雇用の分野における男女の均等な機会及び待遇の確保等に関する法律",
+  "均等法": "雇用の分野における男女の均等な機会及び待遇の確保等に関する法律",
+  "育児介護休業法": "育児休業、介護休業等育児又は家族介護を行う労働者の福祉に関する法律",
+  "育介法": "育児休業、介護休業等育児又は家族介護を行う労働者の福祉に関する法律",
+  "高年齢者雇用安定法": "高年齢者等の雇用の安定等に関する法律",
+  "障害者雇用促進法": "障害者の雇用の促進等に関する法律",
+  "労働施策総合推進法": "労働施策の総合的な推進並びに労働者の雇用の安定及び職業生活の充実等に関する法律",
+  "パワハラ防止法": "労働施策の総合的な推進並びに労働者の雇用の安定及び職業生活の充実等に関する法律",
+
+  /* ── 手続・倒産・紛争解決 ─────────────────────── */
+  "民訴法": "民事訴訟法",
+  "ADR法": "裁判外紛争解決手続の利用の促進に関する法律",
+  "ADR促進法": "裁判外紛争解決手続の利用の促進に関する法律",
+
+  /* ── 不動産・登記・建設 ──────────────────────── */
+  "借地借家法": "借地借家法",
+  "区分所有法": "建物の区分所有等に関する法律",
+  "マンション法": "建物の区分所有等に関する法律",
+  "宅建業法": "宅地建物取引業法",
+
+  /* ── 国際取引・規制・環境 ─────────────────────── */
   "外為法": "外国為替及び外国貿易法",
-  "労基法": "労働基準法",
+  "経済安全保障推進法": "経済施策を一体的に講ずることによる安全保障の確保の推進に関する法律",
+  "経済安保推進法": "経済施策を一体的に講ずることによる安全保障の確保の推進に関する法律",
+  "化審法": "化学物質の審査及び製造等の規制に関する法律",
+  "廃棄物処理法": "廃棄物の処理及び清掃に関する法律",
+  "廃掃法": "廃棄物の処理及び清掃に関する法律",
+
+  /* ── その他 ─────────────────────────────── */
   "道交法": "道路交通法"
 };
 
@@ -188,22 +265,37 @@ function parseReferences(text) {
 async function resolveLawId(name) {
   name = (name || "").trim();
   if (!name) return "";
-  const official = ALIAS[name] || name;
-  if (idCache.has(official)) return idCache.get(official);
+  if (idCache.has(name)) return idCache.get(name);
 
-  const url = `${API_V2}/laws?law_title=${encodeURIComponent(official)}&limit=10`;
-  let data;
-  try {
-    data = await apiFetchJson(url);
-  } catch (e) {
-    throw e;
+  // 候補の正式名称リストを構築（ALIASの配列/文字列＋生の入力名をフォールバック）
+  const mapped = ALIAS[name];
+  let candidates = [];
+  if (mapped) candidates = Array.isArray(mapped) ? mapped.slice() : [mapped];
+  candidates.push(name);                       // 別名未登録でもそのまま検索を試す
+  candidates = [...new Set(candidates)];
+
+  let id = "";
+  for (const cand of candidates) {
+    id = await searchLawIdByTitle(cand);
+    if (id) break;
   }
+  idCache.set(name, id);
+  return id;
+}
+
+/* 法令名（正式名称）から e-Gov v2 /laws で法令IDを検索 */
+async function searchLawIdByTitle(title) {
+  title = (title || "").trim();
+  if (!title) return "";
+  if (idCache.has("T:" + title)) return idCache.get("T:" + title);
+
+  const url = `${API_V2}/laws?law_title=${encodeURIComponent(title)}&limit=20`;
+  const data = await apiFetchJson(url);  // 失敗時は例外を上位へ
 
   const laws = (data && (data.laws || data.Laws)) || [];
-  let best = "";
-  let bestLen = Infinity;
+  let best = "", bestLen = Infinity;
   for (const l of laws) {
-    const title =
+    const t =
       (l.revision_info && l.revision_info.law_title) ||
       (l.law_info && l.law_info.law_title) ||
       l.law_title || "";
@@ -211,16 +303,21 @@ async function resolveLawId(name) {
       (l.law_info && l.law_info.law_id) ||
       l.law_id || l.LawId || "";
     if (!id) continue;
-    if (title === official) { best = id; bestLen = 0; break; }      // 完全一致優先
-    if (title.startsWith(official) && title.length < bestLen) {     // 前方一致は最短
-      best = id; bestLen = title.length;
+    if (t === title) { best = id; bestLen = 0; break; }            // 完全一致が最優先
+    if (t.startsWith(title) && t.length < bestLen) {               // 前方一致は最短を採用
+      best = id; bestLen = t.length;
     }
   }
-  if (!best && laws.length > 0) {
-    const l0 = laws[0];
-    best = (l0.law_info && l0.law_info.law_id) || l0.law_id || l0.LawId || "";
+  // 前方一致も無ければ「包含」一致のうち最短（過剰一致を避けるため最後の手段）
+  if (!best) {
+    for (const l of laws) {
+      const t = (l.revision_info && l.revision_info.law_title) ||
+                (l.law_info && l.law_info.law_title) || l.law_title || "";
+      const id = (l.law_info && l.law_info.law_id) || l.law_id || l.LawId || "";
+      if (id && t.indexOf(title) >= 0 && t.length < bestLen) { best = id; bestLen = t.length; }
+    }
   }
-  idCache.set(official, best);
+  idCache.set("T:" + title, best);
   return best;
 }
 
@@ -265,7 +362,6 @@ async function fetchArticle(lawId, art, branch, para) {
  *     (2) <LawContents> 配下の <Article Num="34">（条文本文）
  *     → (2) を選ぶ必要がある。 */
 function parseArticleBody(xmlText, para) {
-  let body = "";
   try {
     const doc = new DOMParser().parseFromString(xmlText, "application/xml");
     if (doc.getElementsByTagName("parsererror").length > 0) return "";
@@ -289,26 +385,97 @@ function parseArticleBody(xmlText, para) {
     }
     if (!contentArticle) return "";
 
+    // 表示範囲：項を指定 → その項すべて（号を含む）／ 条のみ → その条すべて
     if (para > 0) {
-      const paras = contentArticle.getElementsByTagName("Paragraph");
-      if (paras.length >= para) body = collectSentences(paras[para - 1]);
+      const ps = childElems(contentArticle, "Paragraph");
+      let target =
+        ps.find((p) => p.getAttribute("Num") === String(para)) || ps[para - 1];
+      if (target) {
+        const lines = [];
+        renderParagraph(target, lines);
+        const t = lines.join("\n").trim();
+        if (t) return t;
+      }
+      // 指定の項が見つからない場合は条全体にフォールバック
     }
-    if (!body) body = collectSentences(contentArticle);
+    return renderArticle(contentArticle).trim();
   } catch (e) {
-    body = "";
+    return "";
   }
-  return body;
 }
 
-function collectSentences(node) {
-  const sents = node.getElementsByTagName("Sentence");
-  let s = "";
+/* ---- XML 構造レンダリング（項番号・号番号・枝番号を保持） ---------------- */
+
+// 条：見出し＋全項（各項に号・細分を含む）
+function renderArticle(art) {
+  const lines = [];
+  const title = textOf(firstChild(art, "ArticleTitle"));
+  const cap = textOf(firstChild(art, "ArticleCaption"));
+  let head = title || "";
+  if (cap) head += (head ? "　" : "") + cap;
+  if (head) lines.push(head);
+  for (const p of childElems(art, "Paragraph")) renderParagraph(p, lines);
+  return lines.join("\n");
+}
+
+// 項：項番号（２、３…。第1項は番号表記なし）＋本文＋号
+function renderParagraph(p, lines) {
+  const num = textOf(firstChild(p, "ParagraphNum"));   // "２" 等。第1項は空
+  const cap = textOf(firstChild(p, "ParagraphCaption"));
+  const sent = sentenceText(firstChild(p, "ParagraphSentence"));
+  let line = num ? num + "　" : "　";                  // 第1項は字下げのみ
+  if (cap) line += cap + "　";
+  line += sent;
+  lines.push(line);
+  for (const it of childElems(p, "Item")) renderItem(it, lines, 1);
+}
+
+// 号：号番号（一、二…）＋本文。イロハ等の細分は再帰
+function renderItem(it, lines, depth) {
+  const title = textOf(firstChild(it, "ItemTitle"));
+  const sent = sentenceText(firstChild(it, "ItemSentence"));
+  lines.push(indent(depth) + (title ? title + "　" : "") + sent);
+  renderSubitems(it, lines, depth + 1, 1);
+}
+
+// 細分（Subitem1=イロハ、Subitem2=(1)(2)… など）を再帰表示
+function renderSubitems(parent, lines, depth, level) {
+  const tag = "Subitem" + level;
+  for (const si of childElems(parent, tag)) {
+    const title = textOf(firstChild(si, tag + "Title"));
+    const sent = sentenceText(firstChild(si, tag + "Sentence"));
+    lines.push(indent(depth) + (title ? title + "　" : "") + sent);
+    renderSubitems(si, lines, depth + 1, level + 1);
+  }
+}
+
+function indent(d) { return "　".repeat(Math.max(0, d)); }
+
+// *Sentence ラッパ配下の <Sentence> を連結（Column=表項目は全角スペース区切り）
+function sentenceText(wrapper) {
+  if (!wrapper) return "";
+  const sents = wrapper.getElementsByTagName("Sentence");
+  const parts = [];
   for (let i = 0; i < sents.length; i++) {
     const t = (sents[i].textContent || "").trim();
-    if (t) s += t;
+    if (t) parts.push(t);
   }
-  return s;
+  return parts.join(sents.length > 1 ? "　" : "");
 }
+
+/* 直下要素ヘルパ（getElementsByTagName は子孫まで拾うため、構造保持には直下走査を使う） */
+function childElems(el, tag) {
+  const out = [];
+  if (!el) return out;
+  const ch = el.children || [];
+  for (let i = 0; i < ch.length; i++) if (ch[i].tagName === tag) out.push(ch[i]);
+  return out;
+}
+function firstChild(el, tag) {
+  const a = childElems(el, tag);
+  return a.length ? a[0] : null;
+}
+function textOf(el) { return el ? (el.textContent || "").trim() : ""; }
 
 /* ===========================================================================
  * 通信（PROXY 設定があれば経由）
