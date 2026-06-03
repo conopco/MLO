@@ -136,11 +136,6 @@ const ALIAS = {
 Office.onReady((info) => {
   if (info.host !== Office.HostType.Word) return;
 
-  // Office.onReady の if (info.host !== Office.HostType.Word) return; の直後に追加
-if (Office.addin && Office.addin.setStartupBehavior) {
-  Office.addin.setStartupBehavior(Office.StartupBehavior.load);
-}
-  
   document.getElementById("status").textContent = "準備完了。本文を選択すると解析します。";
 
   // 選択変更イベント（デバウンス）
@@ -168,11 +163,37 @@ function analyzeSelection() {
     Word.run(async (context) => {
       const sel = context.document.getSelection();
       sel.load("text");
-      const bodyStart = context.document.body.getRange("Start");
-      const preceding = bodyStart.expandTo(sel.getRange("Start"));
-      preceding.load("text");
       await context.sync();
-      handleText(sel.text || "", preceding.text || "");
+      const selText = sel.text || "";
+
+      // ① 選択開始位置より前の本文を取得
+      let preceding = "";
+      try {
+        const before =
+          context.document.body.getRange("Start").expandTo(sel.getRange("Start"));
+        before.load("text");
+        await context.sync();
+        preceding = before.text || "";
+      } catch (e) {
+        preceding = "";
+      }
+
+      // ② 取れなかった場合は本文全体を文脈として使う（直前の法令名の特定用）
+      if (!preceding) {
+        try {
+          const body = context.document.body;
+          body.load("text");
+          await context.sync();
+          let bodyText = body.text || "";
+          // 選択箇所より後ろの法令名を拾わないよう、選択テキストの直前までに限定
+          const idx = selText ? bodyText.indexOf(selText) : -1;
+          preceding = idx > 0 ? bodyText.slice(0, idx) : bodyText;
+        } catch (e2) {
+          preceding = "";
+        }
+      }
+
+      handleText(selText, preceding);
     }).catch(() => {
       // フォールバック：共通APIで選択テキストのみ
       Office.context.document.getSelectedDataAsync(Office.CoercionType.Text, (res) => {
@@ -208,7 +229,12 @@ async function handleText(text, precedingText) {
   const seedLaw = seedLawFromPreceding(precedingText || "");
   const refs = parseReferences(text, seedLaw);
   if (refs.length === 0) {
-    setStatus("選択範囲から法令の条文参照を検出できませんでした。");
+    // 「同法」「法」を含むのに基準となる法令名が見つからなかった場合のヒント
+    if (/(?:同法|^法|[^一-龥]法)\s*(?:第\s*)?[0-9０-９一二三四五六七八九十百千]+\s*条/.test(text) && !seedLaw) {
+      setStatus("「同法／法」の基準となる法令名が文書から見つかりませんでした。法令名を含めて選択してください。");
+    } else {
+      setStatus("選択範囲から法令の条文参照を検出できませんでした。");
+    }
     results.innerHTML = "";
     return;
   }
@@ -324,7 +350,12 @@ function seedLawFromPreceding(text) {
   let m2;
   while ((m2 = re2.exec(text)) !== null) {
     const cand = m2[1].trim();
-    if (!DENY_NAMES.has(cand)) last = cand;
+    const before = m2.index > 0 ? text.charAt(m2.index - 1) : "";
+    if (DENY_NAMES.has(cand)) continue;
+    // 法令番号（例：平成十七年法律第八十六号／令和6年法律第25号）の断片を除外
+    if (cand === "法律" || /年法律$/.test(cand)) continue;
+    if (/[0-9０-９第年]/.test(before)) continue;  // 直前が数字・第・年なら番号の一部とみなす
+    last = cand;
   }
   return last;
 }
