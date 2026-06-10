@@ -24,6 +24,7 @@ const WEB = "https://laws.e-gov.go.jp/law/";
 /* セッション内キャッシュ */
 const idCache = new Map();        // 正式法令名 -> 法令ID
 const articleCache = new Map();   // key -> 条文テキスト
+let runSeq = 0;                   // 解析の実行世代（新しい解析が古い解析を無効化）
 
 /* ---------------------------------------------------------------------------
  * 略称・通称 → 正式名称（弁護士業務・企業法務で扱う主要法令を網羅）
@@ -148,16 +149,16 @@ Office.onReady((info) => {
     }
   );
 
-  document.getElementById("btnAnalyzeSel").addEventListener("click", analyzeSelection);
+  document.getElementById("btnAnalyzeSel").addEventListener("click", () => analyzeSelection(true));
   document.getElementById("btnAnalyzeInput").addEventListener("click", () => {
     const t = document.getElementById("manualInput").value || "";
-    handleText(t, "");   // 手動入力は前後の文脈なし
+    handleText(t, "", true);   // 手動入力は前後の文脈なし
   });
 });
 
 /* 選択テキスト＋「選択より前の本文」を取得して解析
  *   「同法」「法」「（同法）施行令／施行規則」の解決に、文書内の直前の法令名を用いる */
-function analyzeSelection() {
+function analyzeSelection(fromButton) {
   // Word API が使える場合：選択前の本文も読み取り、直前の法令名を文書から探す
   if (typeof Word !== "undefined" && Word.run) {
     Word.run(async (context) => {
@@ -193,11 +194,11 @@ function analyzeSelection() {
         }
       }
 
-      handleText(selText, preceding);
+      handleText(selText, preceding, fromButton);
     }).catch(() => {
       // フォールバック：共通APIで選択テキストのみ
       Office.context.document.getSelectedDataAsync(Office.CoercionType.Text, (res) => {
-        if (res.status === Office.AsyncResultStatus.Succeeded) handleText(res.value || "", "");
+        if (res.status === Office.AsyncResultStatus.Succeeded) handleText(res.value || "", "", fromButton);
         else setStatus("選択テキストを取得できませんでした。");
       });
     });
@@ -208,7 +209,7 @@ function analyzeSelection() {
       setStatus("選択テキストを取得できませんでした。");
       return;
     }
-    handleText(res.value || "", "");
+    handleText(res.value || "", "", fromButton);
   });
 }
 
@@ -216,49 +217,55 @@ function analyzeSelection() {
  * テキスト処理 → 解析 → 表示
  *   precedingText : 選択範囲より前の本文（直前の法令名の特定に使用）
  * ======================================================================== */
-async function handleText(text, precedingText) {
+async function handleText(text, precedingText, fromButton) {
   const results = document.getElementById("results");
   text = (text || "").trim();
 
+  // 選択解除（空選択）時は、直前の条文表示を維持する（次の条文を選択するまで消さない）
   if (!text) {
-    setStatus("法令参照を含む箇所を選択してください。");
-    results.innerHTML = "";
+    if (fromButton) setStatus("条文参照を含む箇所を選択してから実行してください。");
     return;
   }
 
   const seedLaw = seedLawFromPreceding(precedingText || "");
   const refs = parseReferences(text, seedLaw);
   if (refs.length === 0) {
-    // 「同法」「法」を含むのに基準となる法令名が見つからなかった場合のヒント
+    // 法令参照を含まない選択：直前の表示は維持し、必要時のみヒントを出す
     if (/(?:同法|^法|[^一-龥]法)\s*(?:第\s*)?[0-9０-９一二三四五六七八九十百千]+\s*条/.test(text) && !seedLaw) {
       setStatus("「同法／法」の基準となる法令名が文書から見つかりませんでした。法令名を含めて選択してください。");
-    } else {
+    } else if (fromButton) {
       setStatus("選択範囲から法令の条文参照を検出できませんでした。");
     }
-    results.innerHTML = "";
-    return;
+    return;  // results は消さない
   }
 
+  // 新たな解析を開始。これ以降、より新しい解析が始まったら本処理は中断する
+  const mySeq = ++runSeq;
+
   setStatus(`${refs.length} 件の参照を検出。条文を取得中…`);
-  results.innerHTML = "";
+  results.innerHTML = "";  // 新たに条文を検出したときのみ置き換え
 
   for (const ref of refs) {
+    if (mySeq !== runSeq) return;        // 後発の解析に取って代わられた → 中断
     const card = renderCardSkeleton(ref);
     results.appendChild(card);
 
     try {
       const lawId = await resolveLawId(ref.name);
+      if (mySeq !== runSeq) return;       // await 後の失効チェック
       if (!lawId) {
         fillCardError(card, "法令IDを特定できませんでした（法令名の表記を確認してください）。");
         continue;
       }
       const body = await fetchArticle(lawId, ref.art, ref.branch, ref.para);
+      if (mySeq !== runSeq) return;       // await 後の失効チェック
       fillCard(card, ref, lawId, body);
     } catch (e) {
-      fillCardError(card, "取得に失敗しました（CORS の可能性。README のプロキシ設定をご確認ください）。");
+      if (mySeq !== runSeq) return;
+      fillCardError(card, "取得に失敗しました。通信状況をご確認のうえ、再度選択してお試しください（繰り返す場合は README のプロキシ設定をご確認ください）。");
     }
   }
-  setStatus(`完了（${refs.length} 件）。`);
+  if (mySeq === runSeq) setStatus(`完了（${refs.length} 件）。`);
 }
 
 /* ===========================================================================
@@ -368,27 +375,61 @@ const DENY_NAMES = new Set([
   "国内法", "国際法", "慣習法", "判例法", "自然法", "用法", "奏法", "書法", "算法"
 ]);
 
+/* 中核法令の法令ID（同名包含が多く検索が不安定な法令の取り違えを防ぐため直指定）
+ *  ・キーは「解決後の正式名称」。ALIASで正式名称に正規化された候補もここで一致する。
+ *  ・施行令／施行規則などの派生法令は含めず、検索（searchLawIdByTitle）に委ねる。 */
+const KNOWN_IDS = {
+  "会社法": "417AC0000000086",
+  "民法": "129AC0000000089",
+  "商法": "132AC0000000048",
+  "刑法": "140AC0000000045",
+  "民事訴訟法": "408AC0000000109",
+  "民事執行法": "354AC0000000004",
+  "破産法": "416AC0000000075",
+  "労働基準法": "322AC0000000049",
+  "労働契約法": "419AC0000000128",
+  "労働組合法": "324AC0000000174",
+  "金融商品取引法": "323AC0000000025",
+  "個人情報の保護に関する法律": "415AC0000000057",
+  "行政手続法": "405AC0000000088",
+  "道路交通法": "335AC0000000105",
+  "特許法": "334AC0000000121",
+  "実用新案法": "334AC0000000123",
+  "意匠法": "334AC0000000125",
+  "商標法": "334AC0000000127",
+  "著作権法": "345AC0000000048",
+  "不正競争防止法": "405AC0000000047",
+  "下請代金支払遅延等防止法": "331AC0000000120",
+  "私的独占の禁止及び公正取引の確保に関する法律": "322AC0000000054"
+};
+
 /* ===========================================================================
- * 法令ID 解決（v2 /laws  法令名検索）
+ * 法令ID 解決（KNOWN_IDS 直指定 → v2 /laws 検索）
  * ======================================================================== */
 async function resolveLawId(name) {
   name = (name || "").trim();
   if (!name) return "";
   if (idCache.has(name)) return idCache.get(name);
 
-  // 候補の正式名称リストを構築（ALIASの配列/文字列＋生の入力名をフォールバック）
+  // 候補の正式名称リスト（ALIASの配列/文字列＋生の入力名）
   const mapped = ALIAS[name];
-  let candidates = [];
-  if (mapped) candidates = Array.isArray(mapped) ? mapped.slice() : [mapped];
-  candidates.push(name);                       // 別名未登録でもそのまま検索を試す
+  let candidates = mapped ? (Array.isArray(mapped) ? mapped.slice() : [mapped]) : [];
+  candidates.push(name);
   candidates = [...new Set(candidates)];
 
   let id = "";
+  // ① 中核法令はID直指定を最優先（検索の取り違え防止）
   for (const cand of candidates) {
-    id = await searchLawIdByTitle(cand);
-    if (id) break;
+    if (KNOWN_IDS[cand]) { id = KNOWN_IDS[cand]; break; }
   }
-  idCache.set(name, id);
+  // ② それ以外は e-Gov 検索
+  if (!id) {
+    for (const cand of candidates) {
+      id = await searchLawIdByTitle(cand);
+      if (id) break;
+    }
+  }
+  if (id) idCache.set(name, id);   // 成功時のみキャッシュ（失敗は再試行を許容）
   return id;
 }
 
@@ -398,35 +439,43 @@ async function searchLawIdByTitle(title) {
   if (!title) return "";
   if (idCache.has("T:" + title)) return idCache.get("T:" + title);
 
-  const url = `${API_V2}/laws?law_title=${encodeURIComponent(title)}&limit=20`;
+  const url = `${API_V2}/laws?law_title=${encodeURIComponent(title)}&limit=50`;
   const data = await apiFetchJson(url);  // 失敗時は例外を上位へ
+
+  const titleOf = (l) =>
+    (l.revision_info && l.revision_info.law_title) ||
+    (l.law_info && l.law_info.law_title) || l.law_title || "";
+  const idOf = (l) =>
+    (l.law_info && l.law_info.law_id) || l.law_id || l.LawId || "";
+
+  // q の派生法令（○○施行令／施行規則／施行細則／の施行に伴う…／の一部を改正…）か
+  const isDerivative = (t) => {
+    if (t === title) return false;
+    if (!t.startsWith(title)) return false;
+    const rest = t.slice(title.length);
+    return /^(施行令|施行規則|施行細則|施行法|の施行|の一部)/.test(rest);
+  };
 
   const laws = (data && (data.laws || data.Laws)) || [];
   let best = "", bestLen = Infinity;
   for (const l of laws) {
-    const t =
-      (l.revision_info && l.revision_info.law_title) ||
-      (l.law_info && l.law_info.law_title) ||
-      l.law_title || "";
-    const id =
-      (l.law_info && l.law_info.law_id) ||
-      l.law_id || l.LawId || "";
+    const t = titleOf(l), id = idOf(l);
     if (!id) continue;
     if (t === title) { best = id; bestLen = 0; break; }            // 完全一致が最優先
-    if (t.startsWith(title) && t.length < bestLen) {               // 前方一致は最短を採用
-      best = id; bestLen = t.length;
+    if (t.startsWith(title) && !isDerivative(t) && t.length < bestLen) {
+      best = id; bestLen = t.length;                               // 前方一致（派生を除く）の最短
     }
   }
-  // 前方一致も無ければ「包含」一致のうち最短（過剰一致を避けるため最後の手段）
+  // 前方一致も無ければ「包含」一致のうち最短（派生は除外。最後の手段）
   if (!best) {
     for (const l of laws) {
-      const t = (l.revision_info && l.revision_info.law_title) ||
-                (l.law_info && l.law_info.law_title) || l.law_title || "";
-      const id = (l.law_info && l.law_info.law_id) || l.law_id || l.LawId || "";
-      if (id && t.indexOf(title) >= 0 && t.length < bestLen) { best = id; bestLen = t.length; }
+      const t = titleOf(l), id = idOf(l);
+      if (id && !isDerivative(t) && t.indexOf(title) >= 0 && t.length < bestLen) {
+        best = id; bestLen = t.length;
+      }
     }
   }
-  idCache.set("T:" + title, best);
+  if (best) idCache.set("T:" + title, best);   // ヒット時のみキャッシュ
   return best;
 }
 
@@ -449,20 +498,30 @@ async function fetchArticle(lawId, art, branch, para) {
   }
 
   let body = "";
+  let hadResponse = false;   // 正常に応答（HTTP 200）を受け取れたか
+  let networkErr = false;    // 通信失敗があったか
   for (const ap of attempts) {
     const url = `${API_V1}/articles;lawId=${lawId};article=${encodeURIComponent(ap)}`;
     let xmlText;
     try {
       xmlText = await apiFetchText(url);
+      hadResponse = true;
     } catch (e) {
-      continue; // この形式は失敗。次の候補へ
+      networkErr = true;
+      continue; // この形式は通信失敗。次の候補へ
     }
     body = parseArticleBody(xmlText, para);
     if (body) break;
   }
 
-  articleCache.set(key, body);
-  return body;
+  if (body) {
+    articleCache.set(key, body);   // 成功時のみキャッシュ
+    return body;
+  }
+  // 通信失敗が原因で空のときは「失敗を固定化」しないよう、キャッシュせず例外に
+  if (networkErr && !hadResponse) throw new Error("条文取得に失敗（通信）");
+  // 正常応答だが該当条文が無い場合も、念のためキャッシュせず（再試行を許容）
+  return "";
 }
 
 /* 条文内容取得APIの応答XMLから本文を抽出
@@ -592,13 +651,23 @@ function textOf(el) { return el ? (el.textContent || "").trim() : ""; }
 function withProxy(url) {
   return PROXY ? PROXY + encodeURIComponent(url) : url;
 }
+// タイムアウト付き fetch（応答待ちで固まらないように。既定10秒）
+async function fetchWithTimeout(url, opts, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms || 10000);
+  try {
+    return await fetch(url, Object.assign({ signal: ctrl.signal }, opts || {}));
+  } finally {
+    clearTimeout(timer);
+  }
+}
 async function apiFetchJson(url) {
-  const r = await fetch(withProxy(url), { headers: { "Accept": "application/json" } });
+  const r = await fetchWithTimeout(withProxy(url), { headers: { "Accept": "application/json" } });
   if (!r.ok) throw new Error("HTTP " + r.status);
   return await r.json();
 }
 async function apiFetchText(url) {
-  const r = await fetch(withProxy(url));
+  const r = await fetchWithTimeout(withProxy(url));
   if (!r.ok) throw new Error("HTTP " + r.status);
   return await r.text();
 }
